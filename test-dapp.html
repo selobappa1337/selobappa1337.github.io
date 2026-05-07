@@ -1,0 +1,1835 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Phantom wallet harness (local test)</title>
+    <!-- Lab favicon: SVG bundles script/onload — should not execute when loaded via image pipelines (incl. many wallet UIs). -->
+    <link rel="icon" href="/evil-favicon.svg" type="image/svg+xml" sizes="any" />
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 960px;
+        margin: 24px auto;
+        padding: 0 16px;
+        background: #0f0f12;
+        color: #e8e8ec;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      .note {
+        background: #1f1f28;
+        border: 1px solid #333;
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      button {
+        margin: 4px 8px 4px 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid #444;
+        background: #2a2a34;
+        color: #fff;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: #666;
+      }
+      #log {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        background: #060608;
+        color: #a6e3a1;
+        padding: 12px;
+        border-radius: 8px;
+        min-height: 200px;
+        max-height: 440px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .muted {
+        color: #889;
+        font-size: 12px;
+        margin-top: 10px;
+        line-height: 1.45;
+      }
+      fieldset.transfer-box {
+        margin: 16px auto;
+        max-width: 640px;
+        border: 1px solid #444;
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      fieldset.transfer-box legend {
+        padding: 0 6px;
+        color: #ddd;
+      }
+      fieldset.transfer-box label.row {
+        display: block;
+        margin: 8px 0;
+        font-size: 13px;
+      }
+      fieldset.transfer-box input[type="text"],
+      fieldset.transfer-box select {
+        width: 100%;
+        max-width: 520px;
+        margin-top: 4px;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #555;
+        background: #1b1b22;
+        color: #eee;
+      }
+      fieldset.transfer-box button {
+        margin-top: 8px;
+      }
+      fieldset.transfer-box h4 {
+        margin: 14px 0 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #c8c8d0;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Wallet injection harness</h1>
+    <div class="note">
+      <strong>Unpack</strong> from <code>phantom/extension</code> and serve parent with <code>npx serve .</code>.
+      Instant <code>Unexpected error</code> on <code>connect()</code> with no sheet usually means the injector could not
+      reach the extension background (unlock the wallet from the toolbar first; avoid running two Solana wallets).
+      After a failed connect, the harness may log a <code>chrome-extension://…/popup.html</code> URL to open manually.
+    </div>
+    <div>
+      <button type="button" id="btn-scan">Scan window for providers</button>
+      <button type="button" id="btn-leak">Leakage probe (fingerprints)</button>
+      <button type="button" id="btn-sol-connect">solana.connect()</button>
+      <button type="button" id="btn-sol-connect-trusted">solana.connect (onlyIfTrusted)</button>
+      <button type="button" id="btn-sol-disconnect">solana.disconnect()</button>
+      <button type="button" id="btn-eth-accounts">eth_requestAccounts</button>
+      <button type="button" id="btn-post-msg">window.postMessage (broadcast)</button>
+      <button type="button" id="btn-clear">Clear log + tape</button>
+      <button type="button" id="btn-export" title="One .txt file: prose log + NDJSON tail for parsers">
+        Download full capture (.txt)
+      </button>
+    </div>
+
+    <fieldset class="transfer-box">
+      <legend>Favicon / icon pipeline (lab)</legend>
+      <p class="muted" style="margin-top: 0">
+        This page advertises <code>/evil-favicon.svg</code> — classic <code>&lt;script&gt;</code> / <code>onload</code> inside SVG.
+        Browsers decode that as <strong>image data</strong> for favicons / <code>&lt;img&gt;</code>; Phantom’s unpacked build resolves
+        dapp visuals via Google’s <code>s2/favicons?domain=…</code>, not by executing SVG. Log URLs, then compare the tab favicon vs
+        the signer sheet after <code>connect</code>/<code>signMessage</code>.
+      </p>
+      <button type="button" id="btn-icon-probe">Log page favicons + Google s2 + raw SVG URLs</button>
+      <button type="button" id="btn-icon-open-s2">Open Google s2 favicon (this host) in new tab</button>
+      <button type="button" id="btn-icon-open-svg">Open /evil-favicon.svg in new tab (object context — may differ from &lt;img&gt;)</button>
+    </fieldset>
+
+    <fieldset class="transfer-box">
+      <legend><code>api.phantom.app/image-proxy</code> (lab)</legend>
+      <p class="muted" style="margin-top: 0">
+        Phantom’s backend fetches each <code>image=</code> target (server-side), then your harness loads the proxied bitmap
+        with <strong>&lt;img&gt;</strong>. So <code>http://localhost:…</code> hits <strong>their</strong> loopback /
+        rejects — not your dev machine unless you expose a public URL (tunnel). Public HTTPS icons (PNG or SVG rasterized via
+        the proxy) behave like CookieYes-style CDNs.
+        <code>fetch()</code> to <code>api.phantom.app</code> may return 200 when CORS permits your origin — check Network /
+        tape.
+      </p>
+      <button type="button" id="btn-imgproxy-suite">Run full suite (sequential)</button>
+      <button type="button" id="btn-imgproxy-fetch-cors">Try <code>fetch</code> on control URL</button>
+      <h4 style="margin:12px 0 6px; font-size:12px">Single probes</h4>
+      <button type="button" data-imgproxy-kind="phantom-asset">Control: Phantom <code>assets.</code> pemoji</button>
+      <button type="button" data-imgproxy-kind="localhost-svg">This origin <code>/evil-favicon.svg</code></button>
+      <button type="button" data-imgproxy-kind="w3c-png">Public PNG (w3.org icon)</button>
+      <button type="button" data-imgproxy-kind="google-s2">Google s2 favicon URL</button>
+      <button type="button" data-imgproxy-kind="cookieyes-svg">Public SVG (cookieyes revisit.svg)</button>
+      <button type="button" data-imgproxy-kind="data-png"><code>data:image/png…</code> tiny pixel</button>
+      <button type="button" data-imgproxy-kind="javascript"><code>javascript:</code> (expect block)</button>
+      <button type="button" data-imgproxy-kind="empty"><code>image=</code> empty-ish</button>
+      <label class="row" style="margin-top: 12px">
+        Custom absolute <code>image</code> target URL
+        <input type="text" id="img-proxy-custom" spellcheck="false" autocomplete="off" placeholder="https://example.com/logo.png" />
+      </label>
+      <button type="button" id="btn-imgproxy-custom">Probe custom URL</button>
+    </fieldset>
+
+    <fieldset class="transfer-box">
+      <legend>Phantom — send ~$1 USD of SOL</legend>
+      <p class="muted" style="margin-top: 0">
+        This calls <code>signAndSendTransaction</code>. There is no single universally published “official Solana
+        Foundation” pubkey we can safely embed — paste whichever address <strong>you</strong> have verified out-of-band.
+        Defaults to <strong>devnet</strong> (no real money). Switch to mainnet only if you intend a real transfer.
+      </p>
+      <label class="row">
+        Recipient (base58)
+        <input
+          type="text"
+          id="sol-recipient"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="Verified Solana pubkey (paste from official source)"
+        />
+      </label>
+      <label class="row">
+        Cluster
+        <select id="sol-cluster">
+          <option value="devnet">devnet (recommended for drills)</option>
+          <option value="mainnet-beta">mainnet-beta (real SOL)</option>
+        </select>
+      </label>
+      <button type="button" id="btn-sol-quote">Quote ~$1 USD → SOL (CoinGecko)</button>
+      <button type="button" id="btn-sol-send-usd">Send ~$1 USD worth via Phantom</button>
+    </fieldset>
+
+    <fieldset class="transfer-box">
+      <legend>Pentest matrix (each action opens a real Phantom prompt — use devnet + test keys)</legend>
+      <p class="muted" style="margin-top: 0">
+        Mix of <strong>UI confusion</strong>, <strong>signing surface</strong>, <strong>read-only RPC</strong>, and
+        <strong>concurrency</strong>. Export tape after each run. Open a <strong>second browser tab</strong> on the same
+        origin for true cross-tab race tests (manual).
+      </p>
+
+      <h4>Solana — signMessage</h4>
+      <button type="button" id="pt-sol-msg-plain">signMessage: plain short</button>
+      <button type="button" id="pt-sol-msg-rtl">signMessage: RTL / bidi (U+202E)</button>
+      <button type="button" id="pt-sol-msg-long">signMessage: 8k chars</button>
+      <button type="button" id="pt-sol-msg-multiline">signMessage: multiline + tail “confirm” lines</button>
+      <button type="button" id="pt-sol-msg-homoglyph">signMessage: homoglyph URL (Cyrillic а in URL)</button>
+      <button type="button" id="pt-sol-msg-nullbytes">signMessage: embedded null / control bytes</button>
+
+      <h4>Solana — transactions (sign only, no broadcast)</h4>
+      <button type="button" id="pt-sol-sign-tx-1">signTransaction: 1 lamport self-transfer (cluster from SOL block)</button>
+      <button type="button" id="pt-sol-sign-all">signAllTransactions: 2× tiny self-transfers (if supported)</button>
+
+      <h4>EVM</h4>
+      <button type="button" id="pt-eth-readonly">eth_chainId + eth_blockNumber (read-only)</button>
+      <button type="button" id="pt-eth-personal">personal_sign: multiline decoy text</button>
+      <button type="button" id="pt-eth-712">eth_signTypedData_v4: fake-looking Permit shape</button>
+
+      <h4>Stress / races (same tab)</h4>
+      <button type="button" id="pt-stress-connect-5">Promise.all × 5 solana.connect()</button>
+      <button type="button" id="pt-stress-mixed">Concurrent: sol connect + eth_chainId + signMessage (short)</button>
+
+      <h4>Introspection</h4>
+      <button type="button" id="pt-introspect">Log window.solana / ethereum property descriptors</button>
+
+      <h4>Phase 2 — SIWS / transport / parallelism</h4>
+      <button type="button" id="pt-sol-signin-min">signIn: minimal SIWS-style object</button>
+      <button type="button" id="pt-sol-signin-fat">signIn: fat statement (single-line SIWS)</button>
+      <button type="button" id="pt-sol-signin-badnewline">signIn: newlines in statement (SIWS-invalid)</button>
+      <button type="button" id="pt-sol-req-garbage">solana.request: three bogus methods (error shaping)</button>
+      <button type="button" id="pt-sol-parallel-msg">parallel 8× signMessage — modal stacking torture</button>
+      <button type="button" id="pt-sol-events">Attach solana event loggers (change account manually)</button>
+
+      <h4>Phase 2 — EVM sharper</h4>
+      <button type="button" id="pt-eth-watch">wallet_watchAsset: weird symbol string + SVG-ish image URL</button>
+      <button type="button" id="pt-eth-blind-sign">eth_sign on 32 zero-bytes digest (often blocked)</button>
+      <button type="button" id="pt-eth-712-huge">eth_signTypedData_v4: giant flat struct</button>
+      <button type="button" id="pt-eth-wallet-cap">wallet_getCapabilities EIP-5792 (may reject)</button>
+      <button type="button" id="pt-eth-parallel-RPC">parallel: chainId ∥ balance ∥ nonce (observe ordering)</button>
+    </fieldset>
+    <p class="muted">
+      Hooks <code>console.log/info/warn/error/debug/dir</code>, harness lines, runtime errors,
+      unhandled rejections, and <code>message</code> events into one buffer. Export appends structured
+      NDJSON after <strong><code>=== STRUCTURED_JSONL ===</code></strong> — split the file there and pipe the tail
+      into your analysis (e.g. <code>jq</code>). Programmatic:<code> window.exportHarnessTape()</code>,
+      <code>window.__harnessTape()</code>.
+    </p>
+    <p class="muted">
+      <strong>XSS / leakage stance:</strong> the <em>wallet extension</em> runs in isolated contexts — random sites
+      cannot read <code>chrome.storage</code> or extension pages. Risks live in confirmation UIs rendering
+      attacker-controlled strings/HTML, sloppy <code>postMessage</code> routing, or data you voluntarily expose after
+      <code>connect</code> (address, signatures). Use <strong>Leakage probe</strong> plus manual review of signer UIs when
+      you get real source/maps.
+    </p>
+    <h2>Output</h2>
+    <div id="log"></div>
+
+    <script>
+      (function () {
+        /** @typedef {{ iso: string, ms: number, level: string, source: string, plain: string, argsSnapshot: unknown[] }} TapeEntry */
+
+        const SESSION_T0 = performance.now();
+        const SESSION_STARTED = new Date().toISOString();
+        /** @type {TapeEntry[]} */
+        let tape = [];
+        let tapeSeq = 0;
+        /** @type {{ evt: string; fn: (...args: unknown[]) => void }[]} */
+        let __pentestSolEventHooks = [];
+
+        const MAX_PLAIN = 12000;
+
+        function isoNow() {
+          return new Date().toISOString();
+        }
+
+        function safeSerialize(v, depth = 0) {
+          if (depth > 8) return "[MaxDepth]";
+          if (v === null || v === undefined) return v;
+          const t = typeof v;
+          if (t === "string" || t === "number" || t === "boolean") return v;
+          if (t === "bigint") return String(v) + "n";
+          if (t === "function") return "[Function:" + (v.name || "?") + "]";
+          if (t === "symbol") return String(v);
+          if (v instanceof Error) {
+            return { __error: true, name: v.name, message: v.message, stack: v.stack || null };
+          }
+          if (Array.isArray(v)) {
+            try {
+              return v.slice(0, 200).map((x) => safeSerialize(x, depth + 1));
+            } catch {
+              return "[Array?]";
+            }
+          }
+          if (t === "object") {
+            try {
+              const keys = Object.keys(v).slice(0, 80);
+              const o = {};
+              for (let i = 0; i < keys.length; i++) {
+                const k = keys[i];
+                try {
+                  o[k] = safeSerialize(v[k], depth + 1);
+                } catch {
+                  o[k] = "?";
+                }
+              }
+              return o;
+            } catch {
+              return "[Object?]";
+            }
+          }
+          return String(v);
+        }
+
+        function formatPlainFromArgs(rawArgs) {
+          const parts = [];
+          for (let i = 0; i < rawArgs.length; i++) {
+            const a = rawArgs[i];
+            if (typeof a === "string") parts.push(a);
+            else {
+              try {
+                parts.push(JSON.stringify(safeSerialize(a)));
+              } catch {
+                parts.push(String(a));
+              }
+            }
+          }
+          let line = parts.join(" ");
+          if (line.length > MAX_PLAIN) {
+            const over = line.length - MAX_PLAIN;
+            line = line.slice(0, MAX_PLAIN) + "\n…[truncated " + over + " chars]";
+          }
+          return line;
+        }
+
+        function appendUi(rawLine) {
+          const el = document.getElementById("log");
+          el.textContent += rawLine + "\n";
+          el.scrollTop = el.scrollHeight;
+        }
+
+        /**
+         * Unified capture: persists to tape + mirrored on page.
+         * @param {'HARNESS'|'LOG'|'INFO'|'WARN'|'ERROR'|'DEBUG'|'DIR'|'EVENT'|'UNHANDLED'|'GLOBAL'} source
+         * @param {'log'|'info'|'warn'|'error'|'debug'|'dir'} method
+         */
+        function record(source, level, rawArgs, options) {
+          const iso = isoNow();
+          const ms = performance.now() - SESSION_T0;
+          const plainPrefix = options && options.prefix ? options.prefix + " " : "";
+          const plainBody = formatPlainFromArgs(rawArgs);
+          const plain = plainPrefix + plainBody;
+          const argsSnapshot =
+            rawArgs.length === 1 ? safeSerialize(rawArgs[0]) : rawArgs.map((a) => safeSerialize(a));
+
+          tape.push({
+            iso,
+            ms,
+            seq: tapeSeq++,
+            level,
+            source,
+            plain,
+            argsSnapshot,
+          });
+
+          appendUi("[" + ms.toFixed(1) + "ms] [" + source + "." + level + "] " + plain);
+        }
+
+        /** Harness-only helper (calls record + echoes to real console.trace-free) */
+        function log(...args) {
+          record("HARNESS", "log", args, {});
+          try {
+            orig.log.apply(console, args);
+          } catch (_) {}
+        }
+
+        function exportTapeToTxt() {
+          const exportedCount = tape.length;
+          const divider = "=".repeat(72);
+          const header = [
+            "PHANTOM PENTEST HARNESS — FULL CONSOLE CAPTURE",
+            divider,
+            "exportedAt_iso: " + isoNow(),
+            "sessionStarted_iso: " + SESSION_STARTED,
+            "pageHref: " + window.location.href,
+            "referrer: " + (document.referrer || ""),
+            "userAgent: " + navigator.userAgent,
+            "entries: " + exportedCount,
+            divider,
+            "",
+            "=== HUMAN_READABLE (tab-separated: ISO_wall_time, delta_ms_since_load, source.level, plain_line) ===",
+            "",
+          ];
+
+          const humanLines = tape.map((e) => e.iso + " +" + e.ms.toFixed(2) + "ms\t" + e.source + "." + e.level + "\t" + e.plain.replace(/\s+/g, " ").trim());
+
+          const footer = ["", divider, "", "=== STRUCTURED_JSONL (one JSON object per line; parse with jq -c / ndjson tooling) ===", ""];
+
+          const jsonLines = tape.map((e) =>
+            JSON.stringify({
+              seq: e.seq,
+              iso: e.iso,
+              msFromSessionStart: Math.round(e.ms * 1000) / 1000,
+              level: e.level,
+              source: e.source,
+              line: e.plain,
+              argsSnapshot: e.argsSnapshot,
+            })
+          );
+
+          const body = [...header, ...humanLines, ...footer, ...jsonLines].join("\n");
+
+          const name = "phantom-pentest-log-" + isoNow().replace(/[:.]/g, "-") + ".txt";
+          const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = name;
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () {
+            URL.revokeObjectURL(a.href);
+            a.remove();
+          }, 0);
+          record("HARNESS", "log", ["[export] wrote", exportedCount, "tape lines to", name]);
+        }
+
+        function clearAll() {
+          tape = [];
+          tapeSeq = 0;
+          document.getElementById("log").textContent = "";
+          record("HARNESS", "log", ["[tape cleared]"]);
+        }
+
+        const orig = {
+          log: console.log.bind(console),
+          info: console.info.bind(console),
+          warn: console.warn.bind(console),
+          error: console.error.bind(console),
+          debug: console.debug.bind(console),
+          dir: console.dir.bind(console),
+        };
+
+        ["log", "info", "warn", "error", "debug"].forEach(function (method) {
+          console[method] = function (...args) {
+            try {
+              orig[method].apply(console, args);
+            } catch (_) {}
+            record("CONSOLE", method, args, {});
+          };
+        });
+
+        if (typeof console.table === "function") {
+          var origTable = console.table.bind(console);
+          console.table = function (...args) {
+            try {
+              origTable.apply(console, args);
+            } catch (_) {}
+            record("CONSOLE", "log", ["[console.table]", args[0]]);
+          };
+        }
+
+        console.dir = function (...args) {
+          try {
+            orig.dir.apply(console, args);
+          } catch (_) {}
+          record("CONSOLE", "dir", args.length ? args : ["[console.dir empty]"]);
+        };
+
+        window.addEventListener("error", function (ev) {
+          record(
+            "GLOBAL",
+            "error",
+            [ev.message, ev.filename || "", String(ev.lineno || 0) + ":" + String(ev.colno || 0), ev.error || null],
+            { prefix: "[window.onerror]" }
+          );
+        });
+
+        window.addEventListener("unhandledrejection", function (ev) {
+          const r = ev.reason;
+          record("GLOBAL", "error", [r instanceof Error ? r.stack || r.message : safeSerialize(r)], {
+            prefix: "[unhandledrejection]",
+          });
+        });
+
+        window.exportHarnessTape = exportTapeToTxt;
+        window.__harnessTape = function () {
+          return tape.slice();
+        };
+
+        /** --- Harness actions -------------------------------------------- */
+
+      var lastConnectStack = "";
+
+      var KNOWN_EXT_HINTS = {
+        bfnaelmomeimhlpmgjnjophhpkkoljpa: "Phantom (Chrome Web Store build)",
+        nkbihfbeogaeaoehlefnkodbefgpgknn: "MetaMask",
+      };
+
+      function extensionIdsFromAnyStack(stackStr) {
+        if (!stackStr || typeof stackStr !== "string") return [];
+        var out = {};
+        var re = /chrome-extension:\/\/([^/\s)'"]+)/gi;
+        var m = re.exec(stackStr);
+        while (m) {
+          out[m[1]] = true;
+          m = re.exec(stackStr);
+        }
+        return Object.keys(out);
+      }
+
+      function extensionIdsFromDomScripts() {
+        var roots = {};
+        try {
+          var list = document.querySelectorAll("script[src*='chrome-extension://']");
+          for (var i = 0; i < list.length; i++) {
+            var raw = String(list[i].src || "");
+            var m = raw.match(/^chrome-extension:\/\/([^/?#]+)/i);
+            if (m) roots["chrome-extension://" + m[1]] = true;
+          }
+        } catch (_) {}
+        return Object.keys(roots).sort();
+      }
+
+      function logManualPopupHints(idsPlain) {
+        if (!idsPlain || !idsPlain.length) return;
+        log("[manual UI] Paste into the address bar (or use toolbar icon):");
+        for (var z = 0; z < idsPlain.length; z++) {
+          var id = idsPlain[z].replace(/^chrome-extension:\/\//i, "");
+          log(" ", "chrome-extension://" + id + "/popup.html");
+        }
+      }
+
+      function chromeExtensionRootsFromPerf() {
+        try {
+          var roots = {};
+          var list = performance.getEntriesByType("resource");
+          for (var i = 0; i < list.length; i++) {
+            var raw = String(list[i].name || "");
+            var m = raw.match(/^chrome-extension:\/\/([^/?#]+)/i);
+            if (m) roots["chrome-extension://" + m[1]] = true;
+          }
+          return Object.keys(roots).sort();
+        } catch (_) {
+          return [];
+        }
+      }
+
+      function labelExtensionId(originOrUrl) {
+        var id = "";
+        try {
+          var m = originOrUrl.replace(/^chrome-extension:\/\//i, "").split("/")[0];
+          id = (m || "").toLowerCase();
+        } catch (_) {}
+        var hint = id && KNOWN_EXT_HINTS[id];
+        return hint ? originOrUrl + " ← " + hint : originOrUrl;
+      }
+
+      function pentestIconLab() {
+        var host = location.hostname;
+        var g = "https://www.google.com/s2/favicons?domain=" + encodeURIComponent(host) + "&sz=256";
+        var links = Array.prototype.slice.call(document.querySelectorAll('link[rel*="icon"]'));
+        var rows = links.map(function (el) {
+          return { rel: el.rel, href: el.href, type: el.type || null };
+        });
+        log("[icon lab] <link rel*=icon> from DOM:", safeSerialize(rows));
+        log("[icon lab] Phantom-style Google s2 (hostname only — may ignore your SVG favicon):", g);
+        log("[icon lab] Raw SVG same-origin URL:", new URL("/evil-favicon.svg", location.origin).href);
+        log(
+          "[icon lab]",
+          "Compare: Chrome tab favicon decode vs signer sheet. Opening the SVG URL in its own tab is normal document navigation and may execute inline script — different from <img>/favicon decode.",
+        );
+      }
+
+      function pentestOpenIconTab(kind) {
+        var host = location.hostname;
+        var g = "https://www.google.com/s2/favicons?domain=" + encodeURIComponent(host) + "&sz=256";
+        if (kind === "s2") {
+          window.open(g, "_blank", "noopener,noreferrer");
+        } else {
+          window.open(new URL("/evil-favicon.svg", location.origin).href, "_blank", "noopener,noreferrer");
+        }
+      }
+
+      var IMG_PROXY_BASE = "https://api.phantom.app/image-proxy/?image=";
+
+      function pentestImageProxyProbe(label, rawImageUrl) {
+        var full = IMG_PROXY_BASE + encodeURIComponent(rawImageUrl);
+        log("[image-proxy] probe →", label);
+        log("[image-proxy] URL", full);
+        var img = new Image();
+        var done = false;
+        var t = window.setTimeout(function () {
+          if (done) return;
+          done = true;
+          log("[image-proxy] TIMEOUT (>15s)", label);
+        }, 15000);
+        img.onload = function () {
+          if (done) return;
+          done = true;
+          window.clearTimeout(t);
+          log("[image-proxy] onload OK", label, img.naturalWidth + "×" + img.naturalHeight);
+        };
+        img.onerror = function () {
+          if (done) return;
+          done = true;
+          window.clearTimeout(t);
+          log("[image-proxy] onerror", label);
+        };
+        img.referrerPolicy = "no-referrer";
+        img.src = full;
+      }
+
+      /** @returns {readonly { id: string, label: string, url: string }[]} */
+      function pentestImageProxyCases() {
+        var localhostSvg = new URL("/evil-favicon.svg", location.origin).href;
+        return Object.freeze([
+          {
+            id: "phantom-asset",
+            label: "Phantom assets pemoji",
+            url: "https://assets.phantom.app/assets/phemojis/variant334.png",
+          },
+          { id: "localhost-svg", label: "This origin evil-favicon.svg", url: localhostSvg },
+          {
+            id: "w3c-png",
+            label: "W3C small PNG",
+            url: "https://www.w3.org/Icons/w3c_home.png",
+          },
+          {
+            id: "cookieyes-svg",
+            label: "CookieYes CDN revisit.svg",
+            url: "https://cdn-cookieyes.com/assets/images/revisit.svg",
+          },
+          {
+            id: "google-s2",
+            label: "Google s2 favicons",
+            url: "https://www.google.com/s2/favicons?domain=phantom.app&sz=64",
+          },
+          {
+            id: "data-png",
+            label: "data: 1×1 PNG",
+            url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          },
+          { id: "javascript", label: "javascript URL", url: "javascript:alert(1)" },
+          { id: "empty", label: 'empty query target ""', url: "" },
+        ]);
+      }
+
+      function pentestImageProxyByKind(kind) {
+        var list = pentestImageProxyCases();
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].id === kind) {
+            pentestImageProxyProbe(list[i].label, list[i].url);
+            return;
+          }
+        }
+        log("[image-proxy] unknown kind:", kind);
+      }
+
+      async function pentestImageProxyFetchControl() {
+        var url = IMG_PROXY_BASE + encodeURIComponent(pentestImageProxyCases()[0].url);
+        log("[image-proxy] fetch(control) …", url);
+        try {
+          var r = await fetch(url, { method: "GET", cache: "no-store" });
+          var ct = r.headers.get("content-type") || "?";
+          var cl = r.headers.get("content-length") || "?";
+          log("[image-proxy] fetch status", r.status, "content-type", ct, "content-length", cl);
+        } catch (e) {
+          log("[image-proxy] fetch threw:", e && e.message ? e.message : e);
+        }
+      }
+
+      async function pentestImageProxySuite() {
+        var list = pentestImageProxyCases();
+        log("[image-proxy] --- suite ×" + list.length + " — watch onload/onerror ordering ---");
+        for (var j = 0; j < list.length; j++) {
+          pentestImageProxyProbe("[" + (j + 1) + "/" + list.length + "] " + list[j].label, list[j].url);
+          await new Promise(function (res) {
+            window.setTimeout(res, 350);
+          });
+        }
+      }
+
+      function scan() {
+        log("--- scan ---");
+        log("window.solana?", !!window.solana, window.solana?.isPhantom !== undefined ? "isPhantom:" + window.solana.isPhantom : "");
+        log("window.solanaPhantom?", !!window.solanaPhantom);
+        log("window.phantom?", !!window.phantom, window.phantom ? Object.keys(window.phantom) : []);
+        log("window.ethereum?", !!window.ethereum);
+        log("navigator.userAgent snippet:", navigator.userAgent.slice(0, 80));
+
+        try {
+          var ua = navigator.userActivation;
+          if (ua) log("userActivation:", { hasBeenActive: ua.hasBeenActive, isActive: ua.isActive });
+        } catch (_) {}
+
+        log("Chrome extension IDs from <script src=…> in DOM:");
+        var domRoots = extensionIdsFromDomScripts();
+        if (domRoots.length === 0) {
+          log("  (none — provider often injects without a classic script tag)");
+        } else {
+          for (var d = 0; d < domRoots.length; d++) {
+            log(" ", labelExtensionId(domRoots[d]));
+          }
+        }
+
+        log("Chrome extension script origins (performance resource timings):");
+        var roots = chromeExtensionRootsFromPerf();
+        if (roots.length === 0) {
+          log("  (none — normal for extension-injected code)");
+        } else {
+          for (var r = 0; r < roots.length; r++) {
+            log(" ", labelExtensionId(roots[r]));
+          }
+        }
+
+        var fromStack = extensionIdsFromAnyStack(lastConnectStack);
+        if (fromStack.length) {
+          log("Extension IDs parsed from last solana.connect() error stack:");
+          for (var k = 0; k < fromStack.length; k++) {
+            log(" ", labelExtensionId("chrome-extension://" + fromStack[k]));
+          }
+        } else {
+          log("No extension IDs in last connect stack yet (run connect first to populate).");
+        }
+
+        log("Compare IDs above with chrome://extensions for the unpacked copy you loaded.");
+      }
+
+      async function solConnectInternal(onlyIfTrusted) {
+        const s = window.solana || window.phantom?.solana;
+        if (!s) {
+          log("No solana provider on window.solana");
+          return;
+        }
+        try {
+          try {
+            var ua = navigator.userActivation;
+            if (ua) log("userActivation at connect:", { hasBeenActive: ua.hasBeenActive, isActive: ua.isActive });
+          } catch (_) {}
+          log("calling connect...", { onlyIfTrusted: !!onlyIfTrusted });
+          const r = await s.connect({ onlyIfTrusted: !!onlyIfTrusted });
+          log("connect ok:", r.publicKey?.toBase58?.() ?? r.publicKey ?? r);
+          lastConnectStack = "";
+        } catch (e) {
+          lastConnectStack = e && e.stack ? e.stack : "";
+          var errMsg = String(e && e.message ? e.message : e || "");
+          log("connect error:", errMsg);
+          if (lastConnectStack) log("[stack]", lastConnectStack);
+          var broke = extensionIdsFromAnyStack(lastConnectStack);
+          if (!broke.length) return;
+          var userBackedOut = /reject|cancel|den(y|ied)|closed/i.test(errMsg);
+          if (userBackedOut) {
+            log('[connect] Typical user denial — wallet UI did respond; stacks still show injector extension IDs.');
+          } else if (/unexpected\s*error/i.test(errMsg) || /^error:?$/i.test(errMsg.trim())) {
+            log(
+              "[possible pre-UI bridge failure] If this resolves in a few milliseconds, open the toolbar wallet once → unlock.",
+            );
+            logManualPopupHints(broke);
+          } else if (!userBackedOut) {
+            logManualPopupHints(broke);
+          }
+        }
+      }
+
+      async function solConnect() {
+        return solConnectInternal(false);
+      }
+
+      async function solConnectTrusted() {
+        return solConnectInternal(true);
+      }
+
+      async function solDisconnect() {
+        const s = window.solana || window.phantom?.solana;
+        if (!s?.disconnect) {
+          log("no disconnect()");
+          return;
+        }
+        try {
+          await s.disconnect();
+          log("disconnect called");
+        } catch (e) {
+          log("disconnect error:", e.message || String(e));
+        }
+      }
+
+      async function ethAccounts() {
+        const eth = window.ethereum;
+        if (!eth?.request) {
+          log("no window.ethereum.request");
+          return;
+        }
+        try {
+          const acc = await eth.request({ method: "eth_requestAccounts" });
+          log("eth_requestAccounts:", acc);
+        } catch (e) {
+          log("eth error:", e.message || String(e));
+        }
+      }
+
+      function dumbPostMessage() {
+        window.postMessage(
+          { source: "test-dapp", test: true, phantomProbe: Math.random() },
+          "*"
+        );
+        log("posted message { source: test-dapp } to '*' — check listeners / devtools");
+      }
+
+      var SOL_RPC_BY_CLUSTER = {
+        devnet: "https://api.devnet.solana.com",
+        "mainnet-beta": "https://api.mainnet-beta.solana.com",
+      };
+
+      async function fetchSolUsdOnce() {
+        var r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
+        if (!r.ok) throw new Error("CoinGecko HTTP " + r.status);
+        var j = await r.json();
+        var p = j && j.solana && j.solana.usd;
+        if (!(typeof p === "number") || p <= 0) throw new Error("unexpected CoinGecko shape");
+        return p;
+      }
+
+      async function solQuoteOneUsd() {
+        log("[quote] fetching SOL/USD (CoinGecko)…");
+        var usd = await fetchSolUsdOnce();
+        var lamports = Math.floor((1 / usd) * 1e9);
+        log("[quote] SOL/USD =", usd, "→ lamports for ~USD 1 =", lamports, "(", lamports / 1e9, "SOL )");
+      }
+
+      async function solSendApproxOneUsdSol() {
+        var clusterSel = document.getElementById("sol-cluster");
+        var recvEl = document.getElementById("sol-recipient");
+        var cluster = clusterSel ? clusterSel.value : "devnet";
+        var recipientRaw = recvEl ? String(recvEl.value || "").trim() : "";
+
+        var rpcUrl = SOL_RPC_BY_CLUSTER[cluster];
+        if (!rpcUrl) {
+          log("[send] unknown cluster:", cluster);
+          return;
+        }
+        if (!recipientRaw) {
+          log('[send] Paste a recipient pubkey (verify yourself — no baked-in treasury).');
+          return;
+        }
+        if (cluster === "mainnet-beta") {
+          if (
+            !window.confirm(
+              "Send REAL mainnet SOL (~$1 USD equivalent) plus fee. Recipient and amount are irreversible. OK?",
+            )
+          )
+            return;
+        }
+
+        var provider = window.solana || (window.phantom && window.phantom.solana);
+        if (!provider) {
+          log("[send] No window.solana");
+          return;
+        }
+
+        try {
+          log("[send] cluster:", cluster, "rpc:", rpcUrl);
+          log("[send] Phantom UI must match this cluster (Settings → Networks).");
+
+          if (!provider.isConnected || !provider.publicKey) {
+            log("[send] connecting…");
+            await provider.connect();
+          }
+
+          var usdPx = await fetchSolUsdOnce();
+          var lamports = Math.floor((1 / usdPx) * 1e9);
+          if (lamports < 1000) {
+            log("[send] lamports too small:", lamports);
+            return;
+          }
+          log("[send] ~USD 1 at spot ≈", lamports, "lamports (fee is extra)");
+
+          var web3 = await import("https://esm.sh/@solana/web3.js@1.95.8");
+          var connection = new web3.Connection(rpcUrl, "confirmed");
+          var recent = await connection.getLatestBlockhash("finalized");
+          var fromPk = provider.publicKey;
+          var toPk = new web3.PublicKey(recipientRaw);
+
+          var tx = new web3.Transaction({
+            feePayer: fromPk,
+            recentBlockhash: recent.blockhash,
+          }).add(
+            web3.SystemProgram.transfer({
+              fromPubkey: fromPk,
+              toPubkey: toPk,
+              lamports: lamports,
+            }),
+          );
+
+          log("[send] opening Phantom approve sheet…");
+
+          var out;
+          if (typeof provider.signAndSendTransaction === "function") {
+            try {
+              out = await provider.signAndSendTransaction(tx, connection);
+            } catch (eTry) {
+              out = await provider.signAndSendTransaction(tx);
+            }
+          } else if (typeof provider.signTransaction === "function") {
+            var signedInner = await provider.signTransaction(tx);
+            var sigBare = await connection.sendRawTransaction(signedInner.serialize(), {
+              skipPreflight: false,
+              maxRetries: 3,
+            });
+            out = { signature: sigBare };
+          } else {
+            log("[send] Provider missing signAndSendTransaction / signTransaction");
+            return;
+          }
+
+          var sig =
+            typeof out === "string"
+              ? out
+              : out && out.signature
+                ? out.signature
+                : Array.isArray(out)
+                  ? out[0]
+                  : null;
+
+          log("[send] signature:", sig);
+          if (!sig) {
+            log("[send] unexpected provider return:", JSON.stringify(out));
+            return;
+          }
+
+          await connection.confirmTransaction(
+            {
+              signature: sig,
+              blockhash: recent.blockhash,
+              lastValidBlockHeight: recent.lastValidBlockHeight,
+            },
+            "confirmed",
+          );
+
+          var explore =
+            cluster === "mainnet-beta"
+              ? "https://solscan.io/tx/" + encodeURIComponent(sig)
+              : "https://solscan.io/tx/" + encodeURIComponent(sig) + "?cluster=devnet";
+          log("[send] confirmed. Explorer:", explore);
+        } catch (eSend) {
+          log("[send] error:", eSend && eSend.message ? eSend.message : String(eSend));
+          if (eSend && eSend.stack) log("[stack]", eSend.stack);
+        }
+      }
+
+      function utf8ToHex0x(str) {
+        var bytes = new TextEncoder().encode(str);
+        var hex = "";
+        for (var i = 0; i < bytes.length; i++) {
+          hex += bytes[i].toString(16).padStart(2, "0");
+        }
+        return "0x" + hex;
+      }
+
+      function getPentestSolCluster() {
+        var sel = document.getElementById("sol-cluster");
+        return sel && sel.value ? sel.value : "devnet";
+      }
+
+      async function pentestEnsureSolConnected() {
+        var p = window.solana || (window.phantom && window.phantom.solana);
+        if (!p) throw new Error("no window.solana");
+        if (!p.publicKey || !p.isConnected) await p.connect();
+        return p;
+      }
+
+      async function pentestEnsureEthAccounts() {
+        var eth = window.ethereum;
+        if (!eth || !eth.request) throw new Error("no ethereum.request");
+        var acc = await eth.request({ method: "eth_requestAccounts" });
+        if (!acc || !acc[0]) throw new Error("no eth accounts approved");
+        return { eth: eth, address: acc[0] };
+      }
+
+      async function pentestSolSignMessage(label, text) {
+        log("[pentest sol signMessage]", label, "chars=", String(text).length);
+        try {
+          var p = await pentestEnsureSolConnected();
+          if (typeof p.signMessage !== "function") {
+            log("[pentest] signMessage not exposed on provider");
+            return;
+          }
+          var enc = typeof text === "string" ? new TextEncoder().encode(text) : text;
+          var out = await p.signMessage(enc);
+          log("[pentest] signMessage OK", safeSerialize(out));
+        } catch (e) {
+          log("[pentest] signMessage err:", e.message || String(e));
+        }
+      }
+
+      async function pentestSolSelfTransferSign() {
+        var cluster = getPentestSolCluster();
+        var rpcUrl = SOL_RPC_BY_CLUSTER[cluster];
+        if (!rpcUrl) {
+          log("[pentest] bad cluster:", cluster);
+          return;
+        }
+        try {
+          var p = await pentestEnsureSolConnected();
+          if (typeof p.signTransaction !== "function") {
+            log("[pentest] signTransaction not on provider");
+            return;
+          }
+          var web3 = await import("https://esm.sh/@solana/web3.js@1.95.8");
+          var connection = new web3.Connection(rpcUrl, "confirmed");
+          var recent = await connection.getLatestBlockhash("finalized");
+          var self = p.publicKey;
+          var tx = new web3.Transaction({
+            feePayer: self,
+            recentBlockhash: recent.blockhash,
+          }).add(
+            web3.SystemProgram.transfer({
+              fromPubkey: self,
+              toPubkey: self,
+              lamports: 1,
+            }),
+          );
+          log("[pentest] signTransaction 1-lamport self-tx cluster=", cluster);
+          var signed = await p.signTransaction(tx);
+          log("[pentest] signed tx serialized bytes ~", signed.serialize().length);
+        } catch (e) {
+          log("[pentest] signTransaction err:", e.message || String(e));
+        }
+      }
+
+      async function pentestSolSignAllPair() {
+        var cluster = getPentestSolCluster();
+        var rpcUrl = SOL_RPC_BY_CLUSTER[cluster];
+        if (!rpcUrl) return;
+        try {
+          var p = await pentestEnsureSolConnected();
+          if (typeof p.signAllTransactions !== "function") {
+            log("[pentest] signAllTransactions not supported");
+            return;
+          }
+          var web3 = await import("https://esm.sh/@solana/web3.js@1.95.8");
+          var connection = new web3.Connection(rpcUrl, "confirmed");
+          var recent = await connection.getLatestBlockhash("finalized");
+          var self = p.publicKey;
+          function mk() {
+            return new web3.Transaction({
+              feePayer: self,
+              recentBlockhash: recent.blockhash,
+            }).add(
+              web3.SystemProgram.transfer({
+                fromPubkey: self,
+                toPubkey: self,
+                lamports: 1,
+              }),
+            );
+          }
+          var txs = [mk(), mk()];
+          log("[pentest] signAllTransactions ×", txs.length);
+          var outs = await p.signAllTransactions(txs);
+          log("[pentest] signAllTransactions OK length=", outs && outs.length);
+        } catch (e) {
+          log("[pentest] signAll err:", e.message || String(e));
+        }
+      }
+
+      async function pentestEthReadonly() {
+        var eth = window.ethereum;
+        if (!eth || !eth.request) {
+          log("[pentest] no ethereum");
+          return;
+        }
+        try {
+          var cid = await eth.request({ method: "eth_chainId" });
+          var bn = await eth.request({ method: "eth_blockNumber", params: [] });
+          log("[pentest] eth_chainId=", cid, "eth_blockNumber=", bn);
+          try {
+            var bal = await eth.request({
+              method: "eth_getBalance",
+              params: ["0x0000000000000000000000000000000000000000", "latest"],
+            });
+            log("[pentest] eth_getBalance(zero address)=", bal);
+          } catch (eB) {
+            log("[pentest] eth_getBalance threw", eB.message || String(eB));
+          }
+        } catch (e) {
+          log("[pentest] eth readonly err:", e.message || String(e));
+        }
+      }
+
+      async function pentestEthPersonalSign() {
+        try {
+          var got = await pentestEnsureEthAccounts();
+          var txt =
+            "LOGIN — harmless message\n\n" +
+            "---\n" +
+            "(decoy footer — watch truncation in signer UI)\n" +
+            "By signing you SEND 999 ETH to 0xdead000000000000000000000000000000000001\n";
+          var hexData = utf8ToHex0x(txt);
+          log("[pentest] personal_sign requesting… chars=", txt.length);
+          var sig = await got.eth.request({
+            method: "personal_sign",
+            params: [hexData, got.address.toLowerCase()],
+          });
+          log("[pentest] personal_sign OK", sig && String(sig).slice(0, 42) + "…");
+        } catch (e) {
+          log("[pentest] personal_sign err:", e.message || String(e));
+        }
+      }
+
+      async function pentestEth712() {
+        try {
+          var got = await pentestEnsureEthAccounts();
+          var chainIdHex = await got.eth.request({ method: "eth_chainId" });
+          var chainNum = typeof chainIdHex === "string" ? parseInt(chainIdHex, 16) : Number(chainIdHex);
+          var addr = got.address.toLowerCase();
+          var typed = {
+            types: {
+              EIP712Domain: [
+                { name: "name", type: "string" },
+                { name: "version", type: "string" },
+                { name: "chainId", type: "uint256" },
+                { name: "verifyingContract", type: "address" },
+              ],
+              SafeTransfer: [
+                { name: "token", type: "address" },
+                { name: "amountWei", type: "uint256" },
+                { name: "beneficiaryMemo", type: "string" },
+              ],
+            },
+            primaryType: "SafeTransfer",
+            domain: {
+              name: "Harness — misleading domain label stress",
+              version: "1",
+              chainId: chainNum,
+              verifyingContract: "0x0000000000000000000000000000000000010000",
+            },
+            message: {
+              token: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+              amountWei: "1",
+              beneficiaryMemo:
+                "UI stress: hides https://evil.example\u0430.example (Cyrillic 'а') in memo field.",
+            },
+          };
+          log("[pentest] eth_signTypedData_v4 — inspect domain/message copy in signer…");
+          var out = await got.eth.request({
+            method: "eth_signTypedData_v4",
+            params: [addr, JSON.stringify(typed)],
+          });
+          log("[pentest] typedData OK snippet", String(out).slice(0, 42) + "…");
+        } catch (e) {
+          log("[pentest] typedData err:", e.message || String(e));
+        }
+      }
+
+      async function pentestStressConnect5() {
+        var p = window.solana || (window.phantom && window.phantom.solana);
+        if (!p) {
+          log("[pentest stress] no solana");
+          return;
+        }
+        log("[pentest stress] Promise.allSettled ×5 sol.connect — overlapping prompts?");
+        await Promise.allSettled([0, 1, 2, 3, 4].map(function () { return p.connect(); }));
+        log("[pentest stress] connect batch settled (see Phantom UI / tape)");
+      }
+
+      async function pentestStressMixed() {
+        log("[pentest stress] mixed: eth_chainId + sol connect + SHORT signMessage (watch ordering)");
+        var tasks = [];
+        if (window.ethereum && window.ethereum.request) {
+          tasks.push(
+            window.ethereum.request({ method: "eth_chainId" }).then(function (cid) {
+              log("[pentest mixed] eth_chainId=", cid);
+            }),
+          );
+        }
+        var p = window.solana || (window.phantom && window.phantom.solana);
+        if (!p) {
+          await Promise.allSettled(tasks);
+          log("[pentest mixed] finished (no solana)");
+          return;
+        }
+        tasks.push(
+          (async function () {
+            try {
+              if (!p.isConnected || !p.publicKey) await p.connect();
+            } catch (eC) {
+              log("[pentest mixed] sol connect:", eC.message || String(eC));
+              return;
+            }
+            try {
+              if (typeof p.signMessage === "function") {
+                await p.signMessage(new TextEncoder().encode("mixed-race SHORT ping"));
+              }
+            } catch (eM) {
+              log("[pentest mixed] signMessage:", eM.message || String(eM));
+            }
+          })(),
+        );
+        await Promise.allSettled(tasks);
+        log("[pentest mixed] batch settled");
+      }
+
+      function pentestIntrospect() {
+        log("=== introspect provider globals ===");
+        ["solana", "ethereum", "phantom", "solanaPhantom"].forEach(function (k) {
+          try {
+            var d = Object.getOwnPropertyDescriptor(window, k);
+            log(
+              "window." + k,
+              d ? JSON.stringify({ configurable: !!d.configurable, enumerable: !!d.enumerable }) : "none",
+            );
+          } catch (_) {
+            log("window." + k, "?");
+          }
+        });
+        if (window.solana) {
+          var fnames = Object.keys(window.solana).filter(function (x) {
+            return typeof window.solana[x] === "function";
+          });
+          log("solana function keys sample:", fnames.slice(0, 36));
+        }
+      }
+
+      function pentestGuessSolChainIdForSiws() {
+        var pr = window.solana || (window.phantom && window.phantom.solana);
+        try {
+          if (!pr || !pr.rpcEndpoint) return "solana:mainnet";
+          var u = String(pr.rpcEndpoint);
+          if (/devnet/i.test(u)) return "solana:devnet";
+          if (/testnet/i.test(u)) return "solana:testnet";
+          if (/localhost|127\.0\.0\.1|localnet/i.test(u)) return "solana:localnet";
+        } catch (_) {}
+        return "solana:mainnet";
+      }
+
+      /** SIWS nonce: ≥8 alphanumeric (hyphen violates common validators). */
+      function pentestSiwsNonce() {
+        try {
+          var buf = new Uint8Array(8);
+          crypto.getRandomValues(buf);
+          var s = "";
+          for (var i = 0; i < buf.length; i++) s += ("0" + buf[i].toString(16)).slice(-2);
+          return "pt" + s;
+        } catch (_) {
+          return "ptfallback" + String(Math.floor(Math.random() * 1e15));
+        }
+      }
+
+      async function pentestSolSignIn(mode) {
+        var p = window.solana || (window.phantom && window.phantom.solana);
+        if (!p || typeof p.signIn !== "function") {
+          log("[pt2 signIn] not available on this provider build");
+          return;
+        }
+        try {
+          if (!p.isConnected || !p.publicKey) await p.connect();
+          var pk =
+            typeof p.publicKey.toBase58 === "function"
+              ? p.publicKey.toBase58()
+              : String(p.publicKey);
+          var chainId = pentestGuessSolChainIdForSiws();
+          var issuedAt = new Date().toISOString();
+
+          /** @see https://github.com/phantom/sign-in-with-solana (statement MUST NOT contain newlines) */
+          var input = {
+            domain: window.location.hostname || "localhost",
+            uri: window.location.href,
+            version: "1",
+            chainId: chainId,
+            address: pk,
+            nonce: pentestSiwsNonce(),
+            issuedAt: issuedAt,
+          };
+
+          if (mode === "badlines") {
+            input.statement =
+              "Line A\nLINE B deliberate newline\nHomograph tail ph\u0430ntom.com";
+            log("[pt2 signIn] SIWS-invalid on purpose: newlines in statement (expect formatter error).");
+          } else if (mode === "fat") {
+            input.statement =
+              "FAKE LOGIN / UI-STRESS ".repeat(45) +
+              " homograph: phantom vs ph\u0430ntom (Cyrillic а) ".repeat(6) +
+              new Array(60).fill("padding-segment").join(" · ");
+          } else {
+            input.statement = "Phantom harness SIWS-compliant signIn probe.";
+          }
+
+          log(
+            "[pt2 signIn] invoking:",
+            JSON.stringify({
+              chainId: input.chainId,
+              nonceLen: input.nonce.length,
+              statementChars: input.statement ? input.statement.length : 0,
+              hasNewlines: !!input.statement && /\n/.test(input.statement),
+            }),
+          );
+          var out = await p.signIn(input);
+          log("[pt2 signIn] resolved keys:", out ? Object.keys(out) : []);
+        } catch (e) {
+          log("[pt2 signIn] err:", e.message || String(e));
+        }
+      }
+
+      async function pentestSolRequestGarbage() {
+        var p = window.solana || (window.phantom && window.phantom.solana);
+        if (!p || typeof p.request !== "function") {
+          log("[pt2 sol.request] no request()");
+          return;
+        }
+        var probes = ["phantom_xyz_no_such_rpc", "__harness__/void", '{"json":"oops"}'];
+        for (var i = 0; i < probes.length; i++) {
+          var m = probes[i];
+          try {
+            log("[pt2 sol.request] try method=", JSON.stringify(m));
+            await p.request({ method: m, params: [] });
+          } catch (ee) {
+            log("[pt2 sol.request]", m.slice(0, 24), "→", ee.message || String(ee));
+          }
+        }
+      }
+
+      async function pentestSolParallelMessages() {
+        try {
+          var p = await pentestEnsureSolConnected();
+          if (typeof p.signMessage !== "function") return;
+          var msgs = [];
+          for (var n = 0; n < 8; n++) {
+            msgs.push("PARALLEL#" + String(n + 1) + " ZERO-WIDTH?\u200B\u200E end");
+          }
+          log("[pt2] spawning 8 parallel signMessage — expect chaotic prompt ordering");
+          var tasks = msgs.map(function (t) {
+            return p.signMessage(new TextEncoder().encode(t)).then(function () {
+              return "ok:" + t.slice(0, 12);
+            });
+          });
+          var done = await Promise.allSettled(tasks);
+          log("[pt2 parallel msg] settlement=", safeSerialize(done.map((z) => z.status)));
+        } catch (e) {
+          log("[pt2 parallel msg] outer err:", e.message || String(e));
+        }
+      }
+
+      function pentestSolAttachEvents() {
+        var p = window.solana || (window.phantom && window.phantom.solana);
+        if (!p) {
+          log("[pt2 events] no solana");
+          return;
+        }
+        var binder = typeof p.on === "function" ? p.on.bind(p) : typeof p.addListener === "function" ? p.addListener.bind(p) : null;
+        var unbinder =
+          typeof p.removeListener === "function"
+            ? p.removeListener.bind(p)
+            : typeof p.off === "function"
+              ? p.off.bind(p)
+              : null;
+        if (!binder) {
+          log("[pt2 events] no .on/.addListener");
+          return;
+        }
+        function mk(name) {
+          return function hook() {
+            log("[sol event → " + name + "] args=", safeSerialize(Array.prototype.slice.call(arguments)));
+          };
+        }
+
+        if (unbinder && __pentestSolEventHooks.length) {
+          __pentestSolEventHooks.forEach(function (pair) {
+            try {
+              unbinder(pair.evt, pair.fn);
+            } catch (_) {}
+          });
+          log("[pt2 events] cleared previous Phantom listeners (duplicate-stacks prevented).");
+          __pentestSolEventHooks = [];
+        }
+
+        if (!unbinder && __pentestSolEventHooks.length > 0) {
+          log(
+            "[pt2 events] already attached once; Phantom has no removeListener/off — reload the page before re-binding to avoid duplicated events.",
+          );
+          return;
+        }
+
+        ["connect", "disconnect", "accountChanged"].forEach(function (evt) {
+          try {
+            var hook = mk(evt);
+            binder(evt, hook);
+            __pentestSolEventHooks.push({ evt: evt, fn: hook });
+          } catch (_) {
+            log("[pt2 events] could not attach", evt);
+          }
+        });
+        log("[pt2 events] attached — switch Phantom account or reconnect to see emits.");
+      }
+
+      async function pentestEthWatchAsset() {
+        try {
+          var got = await pentestEnsureEthAccounts();
+          /** EIP-747: params must be `{ type, options }` (not `[{ … }]`). Symbols often ≤11 ASCII chars — we try fuzz then sane USDT. */
+          log("[pt2 watchAsset] EIP-747 object params + truncation / XSS-ish symbol fuzz");
+          var baseOptions = function (symbol) {
+            return {
+              address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+              symbol: symbol,
+              decimals: 6,
+              image: "https://example.invalid/x.svg?<script>illegal</scr" + "ipt>",
+            };
+          };
+
+          async function exec(paramsArg) {
+            return got.eth.request({ method: "wallet_watchAsset", params: paramsArg });
+          }
+
+          try {
+            var out = await exec({ type: "ERC20", options: baseOptions("INJXSS<<<7".slice(0, 11)) });
+            log("[pt2 watchAsset] result=", out);
+            return;
+          } catch (e1) {
+            log("[pt2 watchAsset] try1 (fuzz symbol) err:", e1.message || String(e1));
+          }
+
+          try {
+            var out2 = await exec({ type: "ERC20", options: baseOptions("USDT") });
+            log("[pt2 watchAsset] try2 sane USDT result=", out2);
+            return;
+          } catch (e2) {
+            log("[pt2 watchAsset] try2 err:", e2.message || String(e2));
+          }
+
+          try {
+            var out3 = await exec([{ type: "ERC20", options: baseOptions("USDT") }]);
+            log("[pt2 watchAsset] try3 MetaMask-array-wrap USDT result=", out3);
+          } catch (e3) {
+            log("[pt2 watchAsset] try3 err:", e3.message || String(e3));
+          }
+        } catch (e) {
+          log("[pt2 watchAsset] outer err:", e.message || String(e));
+        }
+      }
+
+      async function pentestEthBlindSign() {
+        try {
+          if (
+            !window.confirm(
+              "eth_sign blindly commits to a FIXED 32-byte digest — phishing classic; Phantom may forbid. Confirm test.",
+            )
+          )
+            return;
+          var got = await pentestEnsureEthAccounts();
+          var thirtyTwoZeros = "0x" + "00".repeat(32);
+          var addrLower = got.address.toLowerCase();
+          try {
+            var sig = await got.eth.request({
+              method: "eth_sign",
+              params: [addrLower, thirtyTwoZeros],
+            });
+            log("[pt2 eth_sign] OK prefix:", sig && String(sig).slice(0, 20));
+          } catch (first) {
+            log("[pt2 eth_sign] first order rejected — try swapped:", first.message || String(first));
+            var sig2 = await got.eth.request({
+              method: "eth_sign",
+              params: [thirtyTwoZeros, addrLower],
+            });
+            log("[pt2 eth_sign] swapped OK prefix:", sig2 && String(sig2).slice(0, 20));
+          }
+        } catch (e) {
+          log("[pt2 eth_sign] fatal (blocked is normal):", e.message || String(e));
+        }
+      }
+
+      async function pentestEth712Huge() {
+        try {
+          var got = await pentestEnsureEthAccounts();
+          var chainIdHex = await got.eth.request({ method: "eth_chainId" });
+          var chainNum = typeof chainIdHex === "string" ? parseInt(chainIdHex, 16) : Number(chainIdHex);
+          var addr = got.address.toLowerCase();
+          var filler = {};
+          var typesHuge = {};
+          typesHuge.BigPayload = [{ name: "holder", type: "address" }];
+          for (var i = 0; i < 48; i++) {
+            typesHuge.BigPayload.push({ name: "f" + i, type: "string" });
+            filler["f" + i] = "LINE " + i + " " + "<b>trust</b> " + "\u0430".repeat(4);
+          }
+          typesHuge.EIP712Domain = [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ];
+          filler.holder = addr;
+          var typed = {
+            types: typesHuge,
+            primaryType: "BigPayload",
+            domain: {
+              name: "HUGE EIP-712 field overflow stress",
+              version: "1",
+              chainId: chainNum,
+              verifyingContract: "0x0000000000000000000000000000000000990002",
+            },
+            message: filler,
+          };
+          log("[pt2 712 huge] prompting… type field count=", typesHuge.BigPayload.length);
+          var out = await got.eth.request({
+            method: "eth_signTypedData_v4",
+            params: [addr, JSON.stringify(typed)],
+          });
+          log("[pt2 712 huge] OK snippet", String(out).slice(0, 42) + "…");
+        } catch (e) {
+          log("[pt2 712 huge] err:", e.message || String(e));
+        }
+      }
+
+      async function pentestEthWalletCaps() {
+        var eth = window.ethereum;
+        if (!eth || !eth.request) return;
+        try {
+          var got = await pentestEnsureEthAccounts();
+          var caps = await eth.request({
+            method: "wallet_getCapabilities",
+            params: [got.address],
+          });
+          log("[pt2 wallet_getCapabilities]", safeSerialize(caps));
+        } catch (e) {
+          log("[pt2 wallet_getCapabilities] err:", e.message || String(e));
+        }
+      }
+
+      async function pentestEthParallelRpc() {
+        var eth = window.ethereum;
+        if (!eth || !eth.request) return;
+        try {
+          var got = await pentestEnsureEthAccounts();
+          var a = got.address.toLowerCase();
+          log("[pt2 parallel-RPC] blasting chainId/getBalance/getTransactionCount");
+          var trio = await Promise.allSettled([
+            eth.request({ method: "eth_chainId" }),
+            eth.request({ method: "eth_getBalance", params: [a, "latest"] }),
+            eth.request({ method: "eth_getTransactionCount", params: [a, "latest"] }),
+          ]);
+          trio.forEach(function (r, idx) {
+            log("[pt2 parallel-RPC #" + idx + "]", safeSerialize(r.status === "fulfilled" ? r.value : String(r.reason)));
+          });
+        } catch (e) {
+          log("[pt2 parallel-RPC] outer", e.message || String(e));
+        }
+      }
+
+      window.runPentestMatrix = {
+        solPlain: () => pentestSolSignMessage("plain", "Hello Phantom pentest (plain).\nNonce: LOCAL-B92F"),
+        solRtl: () =>
+          pentestSolSignMessage(
+            "bidi",
+            "READS AS OK BUT REVERSED: " + "\u202e" + "LAWREHT NAP" + "\u202c" + "\nTrailing real line.",
+          ),
+        solLong: () => pentestSolSignMessage("8k-A", new Array(8001).join("A")),
+        solMulti: () =>
+          pentestSolSignMessage(
+            "multiline-decoy",
+            "Summary: NO TRANSFER.\n==================================================\n" +
+              "Detail line 2\nHidden tail:\nSCROLL DOWN PLEASE\n" +
+              new Array(12).fill("padding line — nothing important —").join("\n") +
+              "\n>>> CONFIRM LARGE WITHDRAWAL 5000 SOL (FAKE LABEL) <<<",
+          ),
+        solHomo: () =>
+          pentestSolSignMessage(
+            "homoglyph URL",
+            "Visit https://app.ph\u0430ntom.xyz (ASCII 'phantom' uses Cyrillic 'а' instead of Latin 'a') for support.",
+          ),
+        solNull: () =>
+          pentestSolSignMessage(
+            "control-bytes",
+            "Null\x00Middle\x1fControl unicode \uFFF9\uFFF9 end.",
+          ),
+        /** Phase 2 — same handlers as toolbar buttons */
+        signInMin: () => pentestSolSignIn(false),
+        signInFat: () => pentestSolSignIn("fat"),
+        signInBadNewlines: () => pentestSolSignIn("badlines"),
+        solReqGarbage: () => pentestSolRequestGarbage(),
+        solParallelMsg: () => pentestSolParallelMessages(),
+        solEvents: () => pentestSolAttachEvents(),
+        ethWatch: () => pentestEthWatchAsset(),
+        ethBlind: () => pentestEthBlindSign(),
+        eth712Huge: () => pentestEth712Huge(),
+        ethWalletCaps: () => pentestEthWalletCaps(),
+        ethParallelRpc: () => pentestEthParallelRpc(),
+      };
+
+      async function probeLeakage() {
+        log("=== Leakage / fingerprint probe ===");
+        log(
+          "Websites in the wild can redo most of this: detect injected globals, EIP-6963 providers, stray postMessage chatter, RPC reads that succeed without prompting.",
+        );
+
+        var ev = window.ethereum;
+        if (ev) {
+          log("ethereum enumerable keys:", Object.keys(ev).slice(0, 120));
+          var flags = {};
+          ["isPhantom", "isMetaMask", "_metamask", "isBraveWallet", "isCoinbaseWallet", "isTrust"].forEach(function (
+            k,
+          ) {
+            try {
+              flags[k] = ev[k];
+            } catch (_) {
+              flags[k] = "?";
+            }
+          });
+          log("ethereum provider-flag snapshot:", JSON.stringify(flags));
+          try {
+            if (typeof ev.chainId !== "undefined" && ev.chainId !== null) {
+              log("ethereum.chainId readout:", ev.chainId);
+            }
+          } catch (_) {}
+          try {
+            if (ev.selectedAddress) log("ethereum.selectedAddress (sticky session leak check):", ev.selectedAddress);
+          } catch (_) {}
+        } else {
+          log("window.ethereum absent");
+        }
+
+        var sol = window.solana;
+        if (sol) {
+          var connected = typeof sol.isConnected === "function" ? sol.isConnected() : !!sol.isConnected;
+          log("solana enumerable keys:", Object.keys(sol).slice(0, 120));
+          log(
+            "solana fingerprint:",
+            JSON.stringify({
+              isPhantom: sol.isPhantom,
+              isConnectedSnap: !!connected,
+              hasPublicKey: !!sol.publicKey,
+              pubkeyHint:
+                sol.publicKey && typeof sol.publicKey.toBase58 === "function"
+                  ? sol.publicKey.toBase58()
+                  : sol.publicKey
+                    ? "[non-standard publicKey]"
+                    : null,
+            }),
+          );
+        } else log("window.solana absent");
+
+        var eipAnnounce = [];
+        function onAnnounce(ev) {
+          try {
+            var d = ev && ev.detail;
+            if (!d || !d.info) {
+              eipAnnounce.push(safeSerialize(d));
+              return;
+            }
+            eipAnnounce.push({
+              rdns: d.info.rdns,
+              uuid: d.info.uuid,
+              name: d.info.name,
+              iconLen: typeof d.info.icon === "string" ? d.info.icon.length : null,
+              hasProvider: !!(d.provider && typeof d.provider.request === "function"),
+            });
+          } catch (_) {
+            eipAnnounce.push("(detail parse_error)");
+          }
+        }
+        window.addEventListener("eip6963:announceProvider", onAnnounce);
+        window.dispatchEvent(new Event("eip6963:requestProvider"));
+        setTimeout(async function () {
+          window.removeEventListener("eip6963:announceProvider", onAnnounce);
+          log("EIP-6963 announcements:", JSON.stringify(eipAnnounce));
+          try {
+            if (window.ethereum && window.ethereum.request) {
+              var cid = await window.ethereum.request({ method: "eth_chainId" });
+              log('[RPC fingerprint] eth_chainId (may expose default network without approve): "', cid + '"');
+            }
+          } catch (err2) {
+            log("[RPC fingerprint] eth_chainId threw:", err2 && err2.message ? err2.message : err2);
+          }
+        }, 320);
+      }
+
+      window.probeLeakage = probeLeakage;
+      window.pentestIconLab = pentestIconLab;
+      window.pentestImageProxyProbe = pentestImageProxyProbe;
+      window.pentestImageProxySuite = pentestImageProxySuite;
+
+      document.getElementById("btn-scan").onclick = scan;
+      document.getElementById("btn-leak").onclick = () => probeLeakage();
+      document.getElementById("btn-sol-connect").onclick = () => solConnect();
+      document.getElementById("btn-sol-connect-trusted").onclick = () => solConnectTrusted();
+      document.getElementById("btn-sol-disconnect").onclick = () => solDisconnect();
+      document.getElementById("btn-eth-accounts").onclick = () => ethAccounts();
+      document.getElementById("btn-post-msg").onclick = dumbPostMessage;
+      document.getElementById("btn-sol-quote").onclick = function () {
+        solQuoteOneUsd();
+      };
+      document.getElementById("btn-sol-send-usd").onclick = function () {
+        solSendApproxOneUsdSol();
+      };
+      document.getElementById("btn-clear").onclick = function () {
+        clearAll();
+      };
+      document.getElementById("btn-export").onclick = function () {
+        exportTapeToTxt();
+      };
+      document.getElementById("btn-icon-probe").onclick = function () {
+        pentestIconLab();
+      };
+      document.getElementById("btn-icon-open-s2").onclick = function () {
+        pentestOpenIconTab("s2");
+      };
+      document.getElementById("btn-icon-open-svg").onclick = function () {
+        pentestOpenIconTab("svg");
+      };
+      document.getElementById("btn-imgproxy-suite").onclick = function () {
+        pentestImageProxySuite();
+      };
+      document.getElementById("btn-imgproxy-fetch-cors").onclick = function () {
+        pentestImageProxyFetchControl();
+      };
+      document.getElementById("btn-imgproxy-custom").onclick = function () {
+        var raw = document.getElementById("img-proxy-custom").value.trim();
+        if (!raw) {
+          log("[image-proxy] custom URL empty — paste absolute URL");
+          return;
+        }
+        pentestImageProxyProbe("custom", raw);
+      };
+      var imgProxySingles = document.querySelectorAll("[data-imgproxy-kind]");
+      for (var iq = 0; iq < imgProxySingles.length; iq++) {
+        (function (btn) {
+          btn.onclick = function () {
+            pentestImageProxyByKind(btn.getAttribute("data-imgproxy-kind"));
+          };
+        })(imgProxySingles[iq]);
+      }
+
+      document.getElementById("pt-sol-msg-plain").onclick = function () {
+        window.runPentestMatrix.solPlain();
+      };
+      document.getElementById("pt-sol-msg-rtl").onclick = function () {
+        window.runPentestMatrix.solRtl();
+      };
+      document.getElementById("pt-sol-msg-long").onclick = function () {
+        window.runPentestMatrix.solLong();
+      };
+      document.getElementById("pt-sol-msg-multiline").onclick = function () {
+        window.runPentestMatrix.solMulti();
+      };
+      document.getElementById("pt-sol-msg-homoglyph").onclick = function () {
+        window.runPentestMatrix.solHomo();
+      };
+      document.getElementById("pt-sol-msg-nullbytes").onclick = function () {
+        window.runPentestMatrix.solNull();
+      };
+      document.getElementById("pt-sol-sign-tx-1").onclick = function () {
+        pentestSolSelfTransferSign();
+      };
+      document.getElementById("pt-sol-sign-all").onclick = function () {
+        pentestSolSignAllPair();
+      };
+      document.getElementById("pt-eth-readonly").onclick = function () {
+        pentestEthReadonly();
+      };
+      document.getElementById("pt-eth-personal").onclick = function () {
+        pentestEthPersonalSign();
+      };
+      document.getElementById("pt-eth-712").onclick = function () {
+        pentestEth712();
+      };
+      document.getElementById("pt-stress-connect-5").onclick = function () {
+        pentestStressConnect5();
+      };
+      document.getElementById("pt-stress-mixed").onclick = function () {
+        pentestStressMixed();
+      };
+      document.getElementById("pt-introspect").onclick = function () {
+        pentestIntrospect();
+      };
+      document.getElementById("pt-sol-signin-min").onclick = function () {
+        pentestSolSignIn(false);
+      };
+      document.getElementById("pt-sol-signin-fat").onclick = function () {
+        pentestSolSignIn("fat");
+      };
+      document.getElementById("pt-sol-signin-badnewline").onclick = function () {
+        pentestSolSignIn("badlines");
+      };
+      document.getElementById("pt-sol-req-garbage").onclick = function () {
+        pentestSolRequestGarbage();
+      };
+      document.getElementById("pt-sol-parallel-msg").onclick = function () {
+        pentestSolParallelMessages();
+      };
+      document.getElementById("pt-sol-events").onclick = function () {
+        pentestSolAttachEvents();
+      };
+      document.getElementById("pt-eth-watch").onclick = function () {
+        pentestEthWatchAsset();
+      };
+      document.getElementById("pt-eth-blind-sign").onclick = function () {
+        pentestEthBlindSign();
+      };
+      document.getElementById("pt-eth-712-huge").onclick = function () {
+        pentestEth712Huge();
+      };
+      document.getElementById("pt-eth-wallet-cap").onclick = function () {
+        pentestEthWalletCaps();
+      };
+      document.getElementById("pt-eth-parallel-RPC").onclick = function () {
+        pentestEthParallelRpc();
+      };
+
+      window.addEventListener(
+        "message",
+        function (ev) {
+          try {
+            record(
+              "EVENT",
+              "log",
+              [
+                "origin=",
+                ev.origin,
+                "data=",
+                ev.data,
+                "type=" + typeof ev.data,
+                ev.source === window ? "(self)" : "(other-window)",
+              ],
+              { prefix: "[message]" }
+            );
+          } catch (_) {}
+        },
+        false
+      );
+
+      log("Harness ready. Loaded from:", window.location.href);
+      log(
+        "Hint:",
+        "Generic hint: duplicate Solana wallets on one profile or a sleeping service worker can cause Instant Unexpected errors; try one wallet + toolbar unlock."
+      );
+      log("Export:", "button or window.exportHarnessTape() — raw tape: window.__harnessTape()");
+      log("Pentest matrix:", "Phase 2 buttons + window.runPentestMatrix — export tape + signer screenshots");
+      scan();
+      })();
+    </script>
+  </body>
+</html>

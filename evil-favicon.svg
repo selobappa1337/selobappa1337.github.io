@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128" onload="/*img-context:inactive*/ alert('svg-onload')">
+  <!-- Lab asset: intentional script/onload payloads. Normal &lt;img&gt; / image-decode pipelines should ignore these. -->
+  <script type="application/javascript"><![CDATA[
+    try {
+      alert("svg-script");
+    } catch (e) {}
+  ]]></script>
+  <circle cx="64" cy="64" r="54" fill="#b91c1c" stroke="#7f1d1d" stroke-width="4"/>
+  <text x="64" y="58" fill="#fecaca" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle">LAB</text>
+  <text x="64" y="78" fill="#fecaca" font-family="system-ui,sans-serif" font-size="9" text-anchor="middle">evil-favicon.svg</text>
+</svg>
