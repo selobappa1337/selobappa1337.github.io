@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Lab: HTML-in-SVG via foreignObject (valid SVG).
+  Phantom image-proxy tends to sanitize or reject payloads; compare with sibling probe files.
+-->
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
-<p>hello this is testing</p>
-  <!-- Lab asset: intentional script/onload payloads. Normal &lt;img&gt; / image-decode pipelines should ignore these. -->
-hello nigger
-  <circle cx="64" cy="64" r="54" fill="#b91c1c" stroke="#7f1d1d" stroke-width="4"/>
-  <text x="64" y="58" fill="#fecaca" font-family="system-ui,sans-serif" font-size="13" font-weight="700" text-anchor="middle">LAB</text>
-  <text x="64" y="78" fill="#fecaca" font-family="system-ui,sans-serif" font-size="9" text-anchor="middle">evil-favicon.svg</text>
+  <title>Harness title &lt;b&gt;cdata&lt;/b&gt;</title>
+  <desc>Embed HTML below — proxy may strip foreignObject entirely or rasterize shapes only.</desc>
+
+  <foreignObject x="4" y="4" width="120" height="36">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="margin:0;font:11px system-ui,sans-serif;color:#fecaca;">
+      <p style="margin:0 0 2px;"><strong>HTML</strong> in foreignObject</p>
+      <span style="opacity:.85;">no script / no on* here</span>
+    </div>
+  </foreignObject>
+
+  <circle cx="64" cy="78" r="40" fill="#b91c1c" stroke="#7f1d1d" stroke-width="3"/>
+  <text x="64" y="76" fill="#fecaca" font-family="system-ui,sans-serif" font-size="12" font-weight="700" text-anchor="middle">LAB</text>
+  <text x="64" y="92" fill="#fecaca" font-family="system-ui,sans-serif" font-size="8" text-anchor="middle">evil-favicon.svg</text>
 </svg>
